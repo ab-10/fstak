@@ -1,0 +1,10 @@
+cargo:rerun-if-changed=words/small/adjectives.txt
+cargo:rerun-if-changed=words/small/adverbs.txt
+cargo:rerun-if-changed=words/small/nouns.txt
+cargo:rerun-if-changed=words/medium/adjectives.txt
+cargo:rerun-if-changed=words/medium/adverbs.txt
+cargo:rerun-if-changed=words/medium/nouns.txt
+cargo:rerun-if-changed=words/large/adjectives.txt
+cargo:rerun-if-changed=words/large/adverbs.txt
+cargo:rerun-if-changed=words/large/nouns.txt
+cargo:rerun-if-changed=build.rs
