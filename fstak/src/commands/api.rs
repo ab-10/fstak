@@ -122,7 +122,7 @@ fn add_dir_recursive<W: std::io::Write>(
                 || name_str == "dist"
                 || name_str == ".git"
                 || name_str == ".fstak"
-                || name_str == ".vite"
+                || name_str == ".bun"
                 || name_str == ".next"
                 || name_str == "build"
                 || name_str == "coverage"

@@ -89,8 +89,8 @@ fstak add <pkg> -> aliases `bun add` (always on prod)
 fstak run -> deploys the current project and returns a public URL.
 Must run under 5s.
 
-fstak new -> initializes a new React + Vite project with `.fstak/` project dir.
-Fixed React + Vite template (no local bun or Node runtime required to run `fstak new`).
+fstak new -> initializes a new React + Bun project with `.fstak/` project dir.
+Fixed React + Bun template (no local bun or Node runtime required to run `fstak new`).
 
 ## stack
 
@@ -98,7 +98,7 @@ Fixed React + Vite template (no local bun or Node runtime required to run `fstak
 
 **developer's app:**
 1. react frontend
-2. static build artifacts (remote build output; current scaffold uses Vite)
+2. static build artifacts (remote build output; current scaffold uses Bun)
 
 
 ## infrastructure

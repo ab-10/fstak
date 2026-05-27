@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fstak MVP Story Status Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --text: #1a2533;
+      --muted: #5d6b7d;
+      --passed: #1f8f4f;
+      --failed: #c2372a;
+      --planned: #996a1f;
+      --ring: #d8e1ec;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 15% 10%, #e8f0ff 0%, transparent 30%), radial-gradient(circle at 90% 0%, #f8e8ff 0%, transparent 28%), var(--bg);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 18px 40px; }
+    h1 { margin: 0; font-size: 1.9rem; }
+    .sub { margin-top: 8px; color: var(--muted); font-size: 0.96rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 22px; }
+    .card { background: var(--panel); border: 1px solid var(--ring); border-radius: 14px; padding: 16px; box-shadow: 0 10px 20px rgba(18, 40, 72, 0.05); }
+    .metric-label { font-size: 0.86rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+    .metric-value { font-size: 2rem; margin-top: 6px; font-weight: 700; }
+    .bar-wrap { margin-top: 18px; background: var(--panel); border: 1px solid var(--ring); border-radius: 14px; padding: 14px; }
+    .bar { height: 18px; display: grid; grid-template-columns: var(--p-passed) var(--p-failed) var(--p-planned); overflow: hidden; border-radius: 99px; border: 1px solid #d2dce8; }
+    .bar > div:nth-child(1) { background: var(--passed); }
+    .bar > div:nth-child(2) { background: var(--failed); }
+    .bar > div:nth-child(3) { background: var(--planned); }
+    .legend { margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
+    .board {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .column {
+      background: #f9fbff;
+      border: 1px solid var(--ring);
+      border-radius: 14px;
+      padding: 10px;
+      min-height: 240px;
+    }
+    .column-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 4px 10px;
+      border-bottom: 1px solid #e4ecf5;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+    .column-list { display: grid; gap: 10px; }
+    .story { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--ring); border-radius: 12px; padding: 12px 14px; text-decoration: none; color: inherit; }
+    .num { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: #eef3fa; font-weight: 700; font-size: 0.88rem; color: #304055; }
+    .title { font-size: 0.97rem; line-height: 1.25; }
+    .badge { padding: 4px 9px; border-radius: 999px; font-size: 0.77rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid currentColor; }
+    .passed { color: var(--passed); background: #eaf8f0; }
+    .failed { color: var(--failed); background: #fdeceb; }
+    .planned { color: var(--planned); background: #fff5e6; }
+    @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } .board { grid-template-columns: 1fr; } h1 { font-size: 1.5rem; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Fstak MVP Story Status</h1>
+    <div class="sub">Repo: <code>/Users/seneca/Coding/fstak-hq</code></div>
+    <section class="grid" id="metrics"></section>
+    <section class="bar-wrap" id="distribution"></section>
+    <section class="board" id="board"></section>
+  </main>
+  <script>
+    const stories = [
+      { n: 1, title: "Repository skeleton and local tooling baseline", status: "passed", file: "./fstak-mvp/01-repo-skeleton-and-tooling-baseline.md" },
+      { n: 2, title: "Shared auth semantics and fstak login", status: "passed", file: "./fstak-mvp/02-shared-auth-semantics-and-login.md" },
+      { n: 3, title: "Local project identity state", status: "passed", file: "./fstak-mvp/03-local-project-identity-state.md" },
+      { n: 4, title: "Scaffold command for fixed React + Bun template", status: "failed", file: "./fstak-mvp/04-scaffold-command-react-bun-template.md" },
+      { n: 5, title: "Deploy transport and API contract (fstak run)", status: "passed", file: "./fstak-mvp/05-deploy-transport-and-run-contract.md" },
+      { n: 6, title: "Remote Bun build pipeline", status: "planned", file: "./fstak-mvp/06-remote-bun-build-pipeline.md" },
+      { n: 7, title: "Static asset storage and deployment versioning", status: "planned", file: "./fstak-mvp/07-static-asset-storage-and-versioning.md" },
+      { n: 8, title: "Caddy routing and SPA fallback correctness", status: "planned", file: "./fstak-mvp/08-caddy-routing-and-spa-fallback.md" },
+      { n: 9, title: "Dependency and environment management", status: "passed", file: "./fstak-mvp/09-dependency-and-environment-management.md" },
+      { n: 10, title: "Control plane API surface and list endpoints", status: "passed", file: "./fstak-mvp/10-control-plane-api-surface-and-list-endpoints.md" },
+      { n: 11, title: "Infra-as-code and deploy automation", status: "planned", file: "./fstak-mvp/11-infra-as-code-and-deploy-automation.md" },
+      { n: 12, title: "Verification, tests, and release readiness", status: "failed", file: "./fstak-mvp/12-verification-tests-and-release-readiness.md" }
+    ];
+    const counts = stories.reduce((acc, s) => { acc[s.status] += 1; return acc; }, { passed: 0, failed: 0, planned: 0 });
+    const total = stories.length;
+    const done = counts.passed + counts.failed;
+    const metrics = [
+      ["Total stories", total],
+      ["Passed", counts.passed],
+      ["Failed", counts.failed],
+      ["Planned", counts.planned],
+      ["Completion", `${Math.round((counts.passed / total) * 100)}% passed`],
+      ["Started", `${Math.round((done / total) * 100)}% started`]
+    ];
+    const metricsNode = document.getElementById("metrics");
+    metrics.forEach(([label, value]) => {
+      const el = document.createElement("article");
+      el.className = "card";
+      el.innerHTML = `<div class="metric-label">${label}</div><div class="metric-value">${value}</div>`;
+      metricsNode.appendChild(el);
+    });
+    const dist = document.getElementById("distribution");
+    dist.style.setProperty("--p-passed", `${(counts.passed / total) * 100}%`);
+    dist.style.setProperty("--p-failed", `${(counts.failed / total) * 100}%`);
+    dist.style.setProperty("--p-planned", `${(counts.planned / total) * 100}%`);
+    dist.innerHTML = `<div class="metric-label">Status distribution</div><div class="bar"><div></div><div></div><div></div></div><div class="legend"><span><strong>${counts.passed}</strong> passed</span><span><strong>${counts.failed}</strong> failed</span><span><strong>${counts.planned}</strong> planned</span></div>`;
+    const board = document.getElementById("board");
+    const statusOrder = ["planned", "failed", "passed"];
+    statusOrder.forEach((status) => {
+      const column = document.createElement("section");
+      column.className = "column";
+      const statusStories = stories.filter((s) => s.status === status);
+      column.innerHTML = `<div class="column-head"><span>${status}</span><span>${statusStories.length}</span></div><div class="column-list" id="col-${status}"></div>`;
+      board.appendChild(column);
+      const colList = column.querySelector(`#col-${status}`);
+      statusStories.forEach((s) => {
+        const item = document.createElement("a");
+        item.className = "story";
+        item.href = s.file;
+        item.innerHTML = `<div class="num">${s.n}</div><div class="title">${s.title}</div><div class="badge ${s.status}">${s.status}</div>`;
+        colList.appendChild(item);
+      });
+    });
+  </script>
+</body>
+</html>

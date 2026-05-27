@@ -4,7 +4,7 @@ This document defines implementation stories for fstak. Each story has standalon
 
 **Status values (per CLAUDE.md verification discipline):**
 - `passed`: completion criteria met with direct observed evidence from the external system (running process, HTTP response, file on disk, etc.).
-- `failed`: evidence shows the criteria are not met (e.g., CLI implemented but backend routes missing, template is Vite not Bun).
+- `failed`: evidence shows the criteria are not met (e.g., CLI implemented but backend routes missing, Bun template build output unverified).
 - `unverified`: no direct evidence gathered; claim is still a hypothesis.
 - `planned`: no meaningful implementation started on either client or server.
 
@@ -12,7 +12,7 @@ This document defines implementation stories for fstak. Each story has standalon
 
 ## Current Reality (as of 2026-05 investigation)
 
-The CLI (`fstak/src/`) has a complete, polished, agent-safe implementation of all 10 subcommands, including device OAuth login, `.fstak/state.json` management with migration/recovery, tar.gz archive creation with correct exclusions, `POST /run`, env/deps management, ps/logs/kill, and a full React + Vite scaffold.
+The CLI (`fstak/src/`) has a complete, polished, agent-safe implementation of all 10 subcommands, including device OAuth login, `.fstak/state.json` management with migration/recovery, tar.gz archive creation with correct exclusions, `POST /run`, env/deps management, ps/logs/kill, and a full React + Bun scaffold.
 
 The backend (`backend/control_plane/`) only implements `GET /health`. All other routes (`/auth/device`, `/auth/token`, `/run`, `/projects`, env, deps, kill, logs) are commented stubs in `app.py` under "Future route mounts (Story 2+, 5+, 9+)". The `InMemoryStore` has the data methods, but no HTTP handlers call them. `require_auth()` exists but is never wired.
 
@@ -159,7 +159,7 @@ What remains is the shift from "local dev surface that works on one machine" to 
 
 ---
 
-## Story 4: Scaffold command for fixed React + Vite template
+## Story 4: Scaffold command for fixed React + Bun template
 
 **Goal:** provide a one-command project bootstrap for Developers.
 
@@ -171,15 +171,15 @@ What remains is the shift from "local dev surface that works on one machine" to 
 - Command exits non-interactively and prints the next command Developers should run.
 
 **Reality Check (evidence from code + prior investigation):**
-- CLI side: high-quality implementation. `fstak new` creates a complete fixed React + TypeScript + Vite template (writes `package.json`, `vite.config.ts`, `tsconfig*.json`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/index.css`, `src/App.css`, and `.gitignore`).
-- The generated `package.json` build script is `"build": "tsc -b && vite build"` (Vite + tsc), not Bun. The CLI never invokes `bun` (or checks for it) during scaffolding.
+- CLI side: high-quality implementation. `fstak new` creates a fixed React + TypeScript + Bun template (writes `package.json`, `index.html`, `src/main.tsx`, and `.gitignore`).
+- The generated `package.json` build script is `"build": "bun build src/main.tsx --outdir dist"`. The CLI never invokes `bun` (or checks for it) during scaffolding.
 - Name validation (`validate_name`) is strict and deterministic: must start with lowercase letter, contain only lowercase alphanum + hyphen, no trailing hyphen. Good unit tests exist.
 - The command is fully non-interactive, creates `.fstak/state.json`, runs `git init`, immediately calls `post_run()` for the first deploy, saves the returned slug/url, and prints clear next steps (`cd <name>` and "Edit src/App.tsx, then run `fstak run`").
 - Backend: not involved in scaffolding.
 
-**Status: failed** (all criteria except the build-tool choice are met; the explicit "using Bun" requirement in the original story is not satisfied by the implemented Vite template. This is the only failing criterion for Story 4).
+**Status: failed** (the static output behavior still needs verification against the Bun build pipeline).
 
-**Note:** The implementation chose Vite deliberately to support the "no local runtime required" value proposition. The story (and any remaining README glossary references) encoded an outdated premise. Once the story title/criteria and related docs are aligned to "Vite + no local runtime", this story moves to passed. The Outstanding Work list item #5 tracks the documentation alignment.
+**Note:** The implementation keeps the "no local runtime required" scaffolding value proposition. The remaining risk is whether Bun's build output includes all static files expected by deployment.
 
 ---
 
