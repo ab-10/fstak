@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          version=$(python - <<'PY'
+          import tomllib
+
+          with open('fstak/Cargo.toml', 'rb') as f:
+              data = tomllib.load(f)
+          print(data['package']['version'])
+          PY
+          )
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release tag does not already exist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Release tag v${VERSION} already exists. Bump fstak/Cargo.toml version before merging to main."
+            exit 1
+          fi
+
+      - name: Create and push release tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${VERSION}" "${GITHUB_SHA}"
+          git push origin "v${VERSION}"
+
+  build:
+    needs: prepare-release
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: fstak
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup target add ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../fstak-${VERSION}-${{ matrix.target }}.tar.gz fstak
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fstak-${{ matrix.target }}
+          path: fstak/fstak-${{ needs.prepare-release.outputs.version }}-${{ matrix.target }}.tar.gz
+
+  release:
+    needs:
+      - prepare-release
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          name: v${{ needs.prepare-release.outputs.version }}
+          files: |
+            fstak-aarch64-apple-darwin/*.tar.gz
+            fstak-x86_64-apple-darwin/*.tar.gz
+            fstak-x86_64-unknown-linux-gnu/*.tar.gz
+            fstak-x86_64-unknown-linux-musl/*.tar.gz
+          generate_release_notes: true
+
+  update-tap:
+    needs:
+      - prepare-release
+      - release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Compute SHA256 checksums
+        id: sha
+        run: |
+          arm64_sha=$(sha256sum fstak-aarch64-apple-darwin/*.tar.gz | awk '{print $1}')
+          x86_64_sha=$(sha256sum fstak-x86_64-apple-darwin/*.tar.gz | awk '{print $1}')
+          linux_x86_64_sha=$(sha256sum fstak-x86_64-unknown-linux-gnu/*.tar.gz | awk '{print $1}')
+          echo "arm64=$arm64_sha" >> "$GITHUB_OUTPUT"
+          echo "x86_64=$x86_64_sha" >> "$GITHUB_OUTPUT"
+          echo "linux_x86_64=$linux_x86_64_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-fstak tap
+        uses: actions/checkout@v4
+        with:
+          repository: ab-10/homebrew-fstak
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-fstak
+
+      - name: Update formula
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          ARM64_SHA: ${{ steps.sha.outputs.arm64 }}
+          X86_64_SHA: ${{ steps.sha.outputs.x86_64 }}
+          LINUX_X86_64_SHA: ${{ steps.sha.outputs.linux_x86_64 }}
+        run: |
+          mkdir -p homebrew-fstak/Formula
+          cat > homebrew-fstak/Formula/fstak.rb <<EOF
+          class Fstak < Formula
+            desc "CLI for deploying React SPAs to the fstak production runtime"
+            homepage "https://github.com/ab-10/fstak"
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/ab-10/fstak/releases/download/v${VERSION}/fstak-${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${ARM64_SHA}"
+              end
+              on_intel do
+                url "https://github.com/ab-10/fstak/releases/download/v${VERSION}/fstak-${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${X86_64_SHA}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/ab-10/fstak/releases/download/v${VERSION}/fstak-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${LINUX_X86_64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "fstak"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/fstak --version")
+            end
+          end
+          EOF
+          # Strip leading whitespace from heredoc
+          sed -i 's/^          //' homebrew-fstak/Formula/fstak.rb
+
+      - name: Commit and push
+        run: |
+          cd homebrew-fstak
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/fstak.rb
+          git commit -m "Update fstak to ${{ needs.prepare-release.outputs.version }}"
+          git push
