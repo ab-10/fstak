@@ -7,8 +7,9 @@ use crate::credentials::Credentials;
 
 pub fn logs(args: LogsArgs, _verbose: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let state = LocalState::load(&cwd)
-        .map_err(|_| anyhow::anyhow!("No .fstak/state.json found. Run `fstak new` or `fstak run` first."))?;
+    let state = LocalState::load(&cwd).map_err(|_| {
+        anyhow::anyhow!("No .fstak/state.json found. Run `fstak new` or `fstak run` first.")
+    })?;
     let slug = state
         .project_slug
         .ok_or_else(|| anyhow::anyhow!("No project slug saved. Run `fstak run` first."))?;
@@ -21,7 +22,10 @@ pub fn logs(args: LogsArgs, _verbose: bool) -> Result<()> {
         args.limit
     );
     if let Some(severity) = args.severity {
-        url.push_str(&format!("&severity={}", api::percent_encode_query_value(&severity)));
+        url.push_str(&format!(
+            "&severity={}",
+            api::percent_encode_query_value(&severity)
+        ));
     }
     if let Some(from) = args.from {
         url.push_str(&format!("&from={}", api::percent_encode_query_value(&from)));
@@ -41,7 +45,10 @@ pub fn logs(args: LogsArgs, _verbose: bool) -> Result<()> {
             bail!("session invalid or expired. Run `fstak login` to re-authenticate.")
         }
         Err(ureq::Error::Status(code, resp)) => {
-            bail!("GET {url} returned {code}: {}", resp.into_string().unwrap_or_default())
+            bail!(
+                "GET {url} returned {code}: {}",
+                resp.into_string().unwrap_or_default()
+            )
         }
         Err(ureq::Error::Transport(t)) => bail!("GET {url} failed: {t}"),
     }

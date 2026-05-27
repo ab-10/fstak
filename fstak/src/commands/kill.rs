@@ -32,7 +32,10 @@ pub fn kill(args: KillArgs, _verbose: bool) -> Result<()> {
             bail!("session invalid or expired. Run `fstak login` to re-authenticate.")
         }
         Err(ureq::Error::Status(code, resp)) => {
-            bail!("POST {url} returned {code}: {}", resp.into_string().unwrap_or_default())
+            bail!(
+                "POST {url} returned {code}: {}",
+                resp.into_string().unwrap_or_default()
+            )
         }
         Err(ureq::Error::Transport(t)) => bail!("POST {url} failed: {t}"),
     }

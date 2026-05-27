@@ -243,17 +243,21 @@ pub fn post_run(
 #[derive(Deserialize)]
 pub struct EnvListItem {
     pub key: String,
-    pub updated_at: Option<String>,
+    #[serde(rename = "updated_at")]
+    pub _updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct EnvListResponse {
-    pub project_slug: String,
-    pub project_name: String,
+    #[serde(rename = "project_slug")]
+    pub _project_slug: String,
+    #[serde(rename = "project_name")]
+    pub _project_name: String,
     pub variables: Vec<EnvListItem>,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct DepListItem {
     pub name: String,
     pub requirement: String,
@@ -261,6 +265,7 @@ pub struct DepListItem {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct DepListResponse {
     pub project_slug: String,
     pub project_name: String,
@@ -393,6 +398,7 @@ pub fn dep_set(
     }
 }
 
+#[allow(dead_code)]
 pub fn dep_unset(api_url: &str, token: &str, project_slug: &str, name: &str) -> Result<()> {
     let url = format!(
         "{}/projects/{}/deps/{}",
@@ -419,11 +425,8 @@ pub fn dep_unset(api_url: &str, token: &str, project_slug: &str, name: &str) -> 
     }
 }
 
-pub fn dep_list(
-    api_url: &str,
-    token: &str,
-    project_slug: &str,
-) -> Result<DepListResponse> {
+#[allow(dead_code)]
+pub fn dep_list(api_url: &str, token: &str, project_slug: &str) -> Result<DepListResponse> {
     let url = format!(
         "{}/projects/{}/deps",
         api_url.trim_end_matches('/'),
@@ -463,7 +466,10 @@ pub fn post_feedback<T: serde::Serialize>(
     });
     let body = serde_json::to_string(&full).context("serializing feedback payload")?;
     if body.len() > MAX_FEEDBACK_BYTES {
-        bail!("feedback submission exceeds 1MB limit ({} bytes)", body.len());
+        bail!(
+            "feedback submission exceeds 1MB limit ({} bytes)",
+            body.len()
+        );
     }
 
     let mut req = ureq::post(&url).set("Content-Type", "application/json");

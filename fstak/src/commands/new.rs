@@ -11,7 +11,8 @@ pub fn new_project(args: NewArgs, _verbose: bool) -> Result<()> {
     if dir.exists() {
         bail!("Directory '{}' already exists", args.name);
     }
-    std::fs::create_dir_all(dir.join("src")).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(dir.join("src"))
+        .with_context(|| format!("creating {}", dir.display()))?;
 
     std::fs::write(
         dir.join("package.json"),
@@ -79,7 +80,10 @@ mod tests {
     #[test]
     fn rejects_invalid_start_character() {
         let err = validate_name("1alpha").expect_err("expected invalid first character to fail");
-        assert!(err.to_string().contains("must start with a lowercase letter"));
+        assert!(
+            err.to_string()
+                .contains("must start with a lowercase letter")
+        );
     }
 
     #[test]

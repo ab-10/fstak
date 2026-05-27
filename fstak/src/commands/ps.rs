@@ -19,7 +19,10 @@ pub fn ps(_verbose: bool) -> Result<()> {
             bail!("session invalid or expired. Run `fstak login` to re-authenticate.")
         }
         Err(ureq::Error::Status(code, resp)) => {
-            bail!("GET {url} returned {code}: {}", resp.into_string().unwrap_or_default())
+            bail!(
+                "GET {url} returned {code}: {}",
+                resp.into_string().unwrap_or_default()
+            )
         }
         Err(ureq::Error::Transport(t)) => bail!("GET {url} failed: {t}"),
     }
