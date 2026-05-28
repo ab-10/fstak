@@ -68,3 +68,6 @@ logs/
 
 # Node (in case any frontend tooling lands here)
 node_modules/
+
+# Local notes / scratch
+notes/
