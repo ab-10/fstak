@@ -25,6 +25,10 @@ pub enum Command {
     New(NewArgs),
     /// Authenticate via GitHub OAuth, or with a registration code
     Login(LoginArgs),
+    /// Log out and remove the shared SPX session
+    Logout,
+    /// Print the spx_username of the active session
+    Whoami,
     /// Stop a running deployment by project slug
     Kill(KillArgs),
     /// List your projects

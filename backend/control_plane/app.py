@@ -11,12 +11,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .auth import AuthContext, require_auth
-from .auth_manager import manager
+from .auth import AuthContext, _extract_bearer, get_spx_auth_client, require_auth
 from .caddy import CaddyClient
 from .config import get_settings
 from .storage import AssetStorage
@@ -101,36 +100,40 @@ def health() -> JSONResponse:
 
 
 @app.post("/auth/device")
-async def auth_device() -> dict:
-    settings = get_settings()
-    if not settings.spx_github_client_id:
-        raise HTTPException(status_code=500, detail="SPX_GITHUB_CLIENT_ID is not configured")
-    return manager.create_device_session(settings.spx_github_client_id)
+async def auth_device() -> JSONResponse:
+    client = get_spx_auth_client()
+    return JSONResponse(await client.start_device_auth())
 
 
 @app.post("/auth/token")
-async def auth_token(request: Request) -> dict:
+async def auth_token(request: Request) -> JSONResponse:
     body = await request.json()
     poll_token = body.get("poll_token", "")
-    settings = get_settings()
-    if not settings.spx_github_client_id:
-        raise HTTPException(status_code=500, detail="SPX_GITHUB_CLIENT_ID is not configured")
-    return manager.poll_device_token(settings.spx_github_client_id, poll_token)
+    client = get_spx_auth_client()
+    return JSONResponse(await client.poll_device_token(poll_token))
 
 
 @app.post("/auth/code")
-async def auth_code(request: Request) -> dict:
+async def auth_code(request: Request) -> JSONResponse:
     body = await request.json()
     code = body.get("code", "")
-    try:
-        return manager.redeem_code(code)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    client = get_spx_auth_client()
+    return JSONResponse(await client.redeem_code(code))
 
 
 @app.get("/auth/whoami")
-def auth_whoami(auth: AuthContext = Depends(require_auth)) -> JSONResponse:
-    return JSONResponse({"account_id": auth.account_id, "username": auth.username})
+async def auth_whoami(authorization: str | None = Header(default=None)) -> JSONResponse:
+    token = _extract_bearer(authorization)
+    client = get_spx_auth_client()
+    return JSONResponse(await client.whoami(token))
+
+
+@app.delete("/auth/session", status_code=204)
+async def auth_logout(authorization: str | None = Header(default=None)) -> Response:
+    token = _extract_bearer(authorization)
+    client = get_spx_auth_client()
+    await client.revoke_session(token)
+    return Response(status_code=204)
 
 
 class EnvSetPayload(BaseModel):

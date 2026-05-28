@@ -11,6 +11,7 @@ DOMAIN_SUFFIX="${FSTAK_DOMAIN_SUFFIX:-fstak.runspx.com}"
 GCS_BUCKET_NAME="${FSTAK_GCS_BUCKET_NAME:-fstak-static-runspx-com}"
 STATIC_IP_NAME="${FSTAK_STATIC_IP_NAME:-fstak-staging-ip}"
 REGION="${FSTAK_REGION:-${ZONE%-*}}"
+SPX_API_URL="${FSTAK_SPX_API_URL:-https://api.runspx.com}"
 
 if ! gcloud compute instances describe "$INSTANCE" --zone="$ZONE" --project="$PROJECT" >/dev/null 2>&1; then
   echo "creating VM $INSTANCE"
@@ -55,7 +56,6 @@ fi
 gcloud storage buckets update "gs://$GCS_BUCKET_NAME" --no-uniform-bucket-level-access --no-public-access-prevention >/dev/null
 
 DB_URL="$(gcloud secrets versions access latest --secret=spx-database-url --project="$PROJECT")"
-GH_CLIENT_ID="$(gcloud secrets versions access latest --secret=spx-github-client-id --project="$PROJECT")"
 CF_TOKEN="$(gcloud secrets versions access latest --secret=spx-caddy-cloudflare-token --project="$PROJECT")"
 
 ARCHIVE=""
@@ -63,7 +63,6 @@ SECRETS_FILE=$(mktemp -t fstak-secrets.XXXXXX)
 trap 'rm -f "${ARCHIVE:-}" "${SECRETS_FILE:-}"' EXIT
 cat > "$SECRETS_FILE" <<EOF
 FSTAK_DATABASE_URL=$DB_URL
-SPX_GITHUB_CLIENT_ID=$GH_CLIENT_ID
 FSTAK_CADDY_CLOUDFLARE_TOKEN=$CF_TOKEN
 EOF
 
@@ -97,7 +96,8 @@ sudo chmod 600 /etc/fstak/secrets.env
 sudo bash /opt/fstak/backend/infra/deploy-remote.sh \
   --api-hostname='$API_HOSTNAME' \
   --domain-suffix='$DOMAIN_SUFFIX' \
-  --gcs-bucket-name='$GCS_BUCKET_NAME'
+  --gcs-bucket-name='$GCS_BUCKET_NAME' \
+  --spx-api-url='$SPX_API_URL'
 "
 
 echo "deployed to $INSTANCE ($ZONE)"

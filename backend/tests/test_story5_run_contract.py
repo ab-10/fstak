@@ -7,13 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from control_plane.app import _run_build, app
-from control_plane.auth_manager import manager
+from control_plane.auth import get_spx_auth_client
 from control_plane.config import get_settings
+from control_plane.spx_auth_client import CachedIdentity
 from control_plane.store import store
 
 
@@ -47,7 +48,6 @@ def _fake_run_build(src_dir: Path, deps: list[str], env_vars: dict[str, str]) ->
 class Story5RunContractTests(unittest.TestCase):
     def setUp(self) -> None:
         store.reset_for_tests()
-        manager._tokens.clear()  # noqa: SLF001 - test-only reset
 
         # Required env vars for fail-fast config; values are placeholders since
         # _asset_storage and _caddy_client are patched in the tests below.
@@ -57,11 +57,26 @@ class Story5RunContractTests(unittest.TestCase):
                 "FSTAK_DOMAIN_SUFFIX": "test.example.com",
                 "FSTAK_GCS_BUCKET_NAME": "test-bucket",
                 "FSTAK_CADDY_ADMIN_URL": "http://127.0.0.1:2019",
-                "FSTAK_ALLOW_DEV_LOGIN": "1",
+                "FSTAK_SPX_API_URL": "https://api.runspx.com",
             },
         )
         self._env_patch.start()
         get_settings.cache_clear()
+        get_spx_auth_client.cache_clear()
+
+        self.token = "spx-test-token"
+        self.account_id = "story5-account"
+        identity = CachedIdentity(
+            account_id=self.account_id,
+            spx_username="story5-user",
+            github_username="story5-user",
+            expires_at=float("inf"),
+        )
+        self._validate_patch = patch(
+            "control_plane.spx_auth_client.SpxAuthClient.validate_token",
+            new=AsyncMock(return_value=identity),
+        )
+        self._validate_patch.start()
 
         self._asset_patch = patch(
             "control_plane.app._asset_storage", return_value=_FakeAssetStorage()
@@ -74,15 +89,14 @@ class Story5RunContractTests(unittest.TestCase):
         self._run_build_patch.start()
 
         self.client = TestClient(app)
-        auth = self.client.post("/auth/code", json={"code": "story5-user"})
-        self.assertEqual(auth.status_code, 200)
-        self.token = auth.json()["fstak_token"]
 
     def tearDown(self) -> None:
         self._run_build_patch.stop()
         self._asset_patch.stop()
+        self._validate_patch.stop()
         self._env_patch.stop()
         get_settings.cache_clear()
+        get_spx_auth_client.cache_clear()
 
     def _run_deploy(self, project_slug: str | None = None) -> dict:
         data: dict[str, str] = {"project_name": "story5-app"}

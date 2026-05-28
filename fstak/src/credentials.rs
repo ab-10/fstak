@@ -11,7 +11,7 @@ pub struct Credentials {
 impl Credentials {
     fn path() -> Result<PathBuf> {
         let home = dirs::home_dir().context("could not determine home directory")?;
-        Ok(home.join(".fstak").join("credentials.json"))
+        Ok(home.join(".spx").join("credentials.json"))
     }
 
     pub fn load() -> Result<Option<Self>> {
@@ -41,9 +41,18 @@ impl Credentials {
         match Self::load()? {
             Some(creds) => Ok(creds),
             None => bail!(
-                "not logged in (couldn't find token at `~/.fstak/credentials.json`)\n\
+                "not logged in (couldn't find token at `~/.spx/credentials.json`)\n\
                  Run `fstak login` to authenticate with GitHub."
             ),
         }
+    }
+
+    pub fn remove() -> Result<bool> {
+        let path = Self::path()?;
+        if !path.exists() {
+            return Ok(false);
+        }
+        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        Ok(true)
     }
 }

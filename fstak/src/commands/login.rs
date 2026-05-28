@@ -20,8 +20,8 @@ pub fn login_with_code(code: &str, _verbose: bool) -> Result<()> {
 
     let username = resp.username.unwrap_or_else(|| "developer".to_string());
     let token = resp
-        .fstak_token
-        .ok_or_else(|| anyhow::anyhow!("login failed: auth server did not return fstak_token"))?;
+        .spx_token
+        .ok_or_else(|| anyhow::anyhow!("login failed: auth server did not return spx_token"))?;
 
     let creds = Credentials { username, token };
     creds.save()?;
@@ -53,7 +53,7 @@ pub fn login(_verbose: bool) -> Result<()> {
             "pending" => api::sleep_for(poll_interval),
             "ready" => {
                 let username = polled.username.unwrap_or_else(|| "developer".to_string());
-                let token = polled.fstak_token.ok_or_else(|| {
+                let token = polled.spx_token.ok_or_else(|| {
                     anyhow::anyhow!("login failed: auth server returned ready without token")
                 })?;
                 let creds = Credentials { username, token };

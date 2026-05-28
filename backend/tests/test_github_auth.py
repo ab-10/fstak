@@ -2,86 +2,106 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from control_plane.app import app
-from control_plane.auth_manager import manager
+from control_plane.auth import get_spx_auth_client
 from control_plane.config import get_settings
 
 
-class MockResponse:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
+class AuthProxyTests(unittest.TestCase):
+    """fstak's /auth/* endpoints proxy to SPX; no GitHub calls happen in-process."""
 
-    def json(self) -> dict:
-        return self._payload
-
-    def raise_for_status(self) -> None:
-        return None
-
-
-class GitHubAuthTests(unittest.TestCase):
     def setUp(self) -> None:
-        manager._sessions.clear()  # noqa: SLF001 - test-only reset
-        manager._user_codes.clear()  # noqa: SLF001 - test-only reset
-        manager._tokens.clear()  # noqa: SLF001 - test-only reset
         get_settings.cache_clear()
+        get_spx_auth_client.cache_clear()
+        self._env_patch = patch.dict(
+            os.environ,
+            {
+                "FSTAK_DOMAIN_SUFFIX": "test.example.com",
+                "FSTAK_SPX_API_URL": "https://api.runspx.com",
+            },
+            clear=True,
+        )
+        self._env_patch.start()
 
     def tearDown(self) -> None:
+        self._env_patch.stop()
         get_settings.cache_clear()
+        get_spx_auth_client.cache_clear()
 
-    def test_device_auth_requires_spx_github_client_id(self) -> None:
-        with patch.dict(os.environ, {"FSTAK_DOMAIN_SUFFIX": "test.example.com"}, clear=True):
+    def test_device_endpoint_proxies_response_from_spx(self) -> None:
+        spx_payload = {
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://github.com/login/device",
+            "poll_token": "spx-poll-token",
+            "interval": 5,
+            "expires_in": 900,
+        }
+        with patch(
+            "control_plane.spx_auth_client.SpxAuthClient.start_device_auth",
+            new=AsyncMock(return_value=spx_payload),
+        ):
             client = TestClient(app)
             response = client.post("/auth/device")
 
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.json()["detail"], "SPX_GITHUB_CLIENT_ID is not configured")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), spx_payload)
 
-    @patch("control_plane.auth_manager.httpx.get")
-    @patch("control_plane.auth_manager.httpx.post")
-    def test_device_auth_uses_github_login_identity(self, post: MagicMock, get: MagicMock) -> None:
-        post.side_effect = [
-            MockResponse(
-                {
-                    "device_code": "github-device-code",
-                    "user_code": "ABCD-1234",
-                    "verification_uri": "https://github.com/login/device",
-                    "interval": 1,
-                    "expires_in": 900,
-                }
-            ),
-            MockResponse({"error": "authorization_pending"}),
-            MockResponse({"access_token": "github-access-token"}),
-        ]
-        get.return_value = MockResponse({"login": "ab-10"})
-
-        with patch.dict(
-            os.environ,
-            {"SPX_GITHUB_CLIENT_ID": "client-123", "FSTAK_DOMAIN_SUFFIX": "test.example.com"},
-            clear=True,
+    def test_token_endpoint_forwards_poll_token(self) -> None:
+        spx_payload = {
+            "status": "ready",
+            "spx_token": "spx-token-abc",
+            "username": "ab-10",
+        }
+        mock = AsyncMock(return_value=spx_payload)
+        with patch(
+            "control_plane.spx_auth_client.SpxAuthClient.poll_device_token", new=mock
         ):
             client = TestClient(app)
-            start = client.post("/auth/device")
-            self.assertEqual(start.status_code, 200, start.text)
-            started = start.json()
+            response = client.post("/auth/token", json={"poll_token": "spx-poll-token"})
 
-            pending = client.post("/auth/token", json={"poll_token": started["poll_token"]})
-            self.assertEqual(pending.status_code, 200, pending.text)
-            self.assertEqual(pending.json(), {"status": "pending"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), spx_payload)
+        mock.assert_awaited_once_with("spx-poll-token")
 
-            ready = client.post("/auth/token", json={"poll_token": started["poll_token"]})
+    def test_whoami_proxies_spx_identity_shape(self) -> None:
+        identity = {
+            "account_id": "spx-account-uuid",
+            "spx_username": "ab-10",
+            "github_username": "ab-10",
+        }
+        with patch(
+            "control_plane.spx_auth_client.SpxAuthClient.whoami",
+            new=AsyncMock(return_value=identity),
+        ):
+            client = TestClient(app)
+            response = client.get(
+                "/auth/whoami", headers={"Authorization": "Bearer spx-token-abc"}
+            )
 
-        self.assertEqual(ready.status_code, 200, ready.text)
-        body = ready.json()
-        self.assertEqual(body["status"], "ready")
-        self.assertEqual(body["username"], "ab-10")
-        self.assertTrue(body["fstak_token"].startswith("ab-10."))
-        self.assertEqual(post.call_args_list[0].kwargs["data"]["client_id"], "client-123")
-        self.assertEqual(post.call_args_list[1].kwargs["data"]["device_code"], "github-device-code")
-        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer github-access-token")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), identity)
+
+    def test_whoami_rejects_missing_bearer(self) -> None:
+        client = TestClient(app)
+        response = client.get("/auth/whoami")
+        self.assertEqual(response.status_code, 401)
+
+    def test_logout_proxies_to_spx_and_returns_204(self) -> None:
+        revoke = AsyncMock(return_value=None)
+        with patch(
+            "control_plane.spx_auth_client.SpxAuthClient.revoke_session", new=revoke
+        ):
+            client = TestClient(app)
+            response = client.delete(
+                "/auth/session", headers={"Authorization": "Bearer spx-token-abc"}
+            )
+
+        self.assertEqual(response.status_code, 204)
+        revoke.assert_awaited_once_with("spx-token-abc")
 
 
 if __name__ == "__main__":

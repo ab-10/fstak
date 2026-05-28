@@ -19,6 +19,8 @@ fn main() -> Result<()> {
             Some(code) => commands::login::login_with_code(&code, verbose),
             None => commands::login::login(verbose),
         },
+        Command::Logout => commands::logout::logout(verbose),
+        Command::Whoami => commands::whoami::whoami(verbose),
         Command::Kill(args) => commands::kill::kill(args, verbose),
         Command::Ps => commands::ps::ps(verbose),
         Command::Logs(args) => commands::logs::logs(args, verbose),

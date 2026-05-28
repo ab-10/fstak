@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +17,7 @@ class Settings(BaseSettings):
 
     gcs_bucket_name: str = ""
 
-    spx_github_client_id: str = Field(default="", validation_alias="SPX_GITHUB_CLIENT_ID")
+    spx_api_url: str = ""
 
 
 @lru_cache(maxsize=1)
@@ -27,5 +26,10 @@ def get_settings() -> Settings:
     if not settings.domain_suffix:
         raise RuntimeError(
             "FSTAK_DOMAIN_SUFFIX must be set; control plane cannot operate without a domain suffix"
+        )
+    if not settings.spx_api_url:
+        raise RuntimeError(
+            "FSTAK_SPX_API_URL must be set; control plane delegates auth to SPX "
+            "and cannot operate without an SPX API URL"
         )
     return settings

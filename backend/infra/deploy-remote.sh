@@ -4,12 +4,14 @@ set -euo pipefail
 API_HOSTNAME=""
 DOMAIN_SUFFIX=""
 GCS_BUCKET_NAME=""
+SPX_API_URL=""
 
 for arg in "$@"; do
   case "$arg" in
     --api-hostname=*) API_HOSTNAME="${arg#*=}" ;;
     --domain-suffix=*) DOMAIN_SUFFIX="${arg#*=}" ;;
     --gcs-bucket-name=*) GCS_BUCKET_NAME="${arg#*=}" ;;
+    --spx-api-url=*) SPX_API_URL="${arg#*=}" ;;
     *)
       echo "unknown arg: $arg" >&2
       exit 2
@@ -17,8 +19,8 @@ for arg in "$@"; do
   esac
 done
 
-if [ -z "$API_HOSTNAME" ] || [ -z "$DOMAIN_SUFFIX" ] || [ -z "$GCS_BUCKET_NAME" ]; then
-  echo "required args: --api-hostname= --domain-suffix= --gcs-bucket-name=" >&2
+if [ -z "$API_HOSTNAME" ] || [ -z "$DOMAIN_SUFFIX" ] || [ -z "$GCS_BUCKET_NAME" ] || [ -z "$SPX_API_URL" ]; then
+  echo "required args: --api-hostname= --domain-suffix= --gcs-bucket-name= --spx-api-url=" >&2
   exit 2
 fi
 
@@ -59,6 +61,7 @@ Environment=FSTAK_API_HOSTNAME=$API_HOSTNAME
 Environment=FSTAK_DOMAIN_SUFFIX=$DOMAIN_SUFFIX
 Environment=FSTAK_GCS_BUCKET_NAME=$GCS_BUCKET_NAME
 Environment=FSTAK_CADDY_ADMIN_URL=http://127.0.0.1:2019
+Environment=FSTAK_SPX_API_URL=$SPX_API_URL
 EOF
 
 echo "==> Python deps"

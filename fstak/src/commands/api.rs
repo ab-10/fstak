@@ -24,15 +24,23 @@ pub struct DeviceAuthStart {
 #[derive(Deserialize)]
 pub struct DeviceAuthPoll {
     pub status: String,
-    pub fstak_token: Option<String>,
+    pub spx_token: Option<String>,
     pub username: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct CodeAuthResponse {
     pub status: String,
-    pub fstak_token: Option<String>,
+    pub spx_token: Option<String>,
     pub username: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+pub struct WhoamiResponse {
+    pub account_id: String,
+    pub spx_username: String,
+    pub github_username: Option<String>,
 }
 
 pub fn api_url() -> String {
@@ -75,6 +83,39 @@ pub fn auth_code(api_url: &str, code: &str) -> Result<CodeAuthResponse> {
             bail!("POST {url} returned {code}: {body}");
         }
         Err(ureq::Error::Transport(t)) => bail!("POST {url} failed: {t}"),
+    }
+}
+
+pub fn auth_whoami(api_url: &str, token: &str) -> Result<WhoamiResponse> {
+    let url = format!("{}/auth/whoami", api_url.trim_end_matches('/'));
+    match ureq::get(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+    {
+        Ok(resp) => resp.into_json().context("parsing whoami response"),
+        Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
+            bail!("session invalid or expired. Run `fstak login` to re-authenticate.")
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_else(|_| "<no body>".into());
+            bail!("GET {url} returned {code}: {body}");
+        }
+        Err(ureq::Error::Transport(t)) => bail!("GET {url} failed: {t}"),
+    }
+}
+
+pub fn auth_logout(api_url: &str, token: &str) -> Result<()> {
+    let url = format!("{}/auth/session", api_url.trim_end_matches('/'));
+    match ureq::delete(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+    {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_else(|_| "<no body>".into());
+            bail!("DELETE {url} returned {code}: {body}");
+        }
+        Err(ureq::Error::Transport(t)) => bail!("DELETE {url} failed: {t}"),
     }
 }
 
