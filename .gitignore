@@ -71,3 +71,6 @@ node_modules/
 
 # Local notes / scratch
 notes/
+
+# Symlink to sibling spx-hq frontend (commit changes there, not here)
+/frontend

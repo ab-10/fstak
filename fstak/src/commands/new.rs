@@ -17,7 +17,7 @@ pub fn new_project(args: NewArgs, _verbose: bool) -> Result<()> {
     std::fs::write(
         dir.join("package.json"),
         format!(
-            "{{\n  \"name\": \"{}\",\n  \"private\": true,\n  \"version\": \"0.1.0\",\n  \"scripts\": {{\n    \"build\": \"bun build src/main.tsx --outdir dist\"\n  }},\n  \"dependencies\": {{\n    \"react\": \"^19.0.0\",\n    \"react-dom\": \"^19.0.0\"\n  }}\n}}\n",
+            "{{\n  \"name\": \"{}\",\n  \"private\": true,\n  \"version\": \"0.1.0\",\n  \"scripts\": {{\n    \"build\": \"bun build index.html --outdir dist\"\n  }},\n  \"dependencies\": {{\n    \"react\": \"^19.0.0\",\n    \"react-dom\": \"^19.0.0\"\n  }}\n}}\n",
             args.name
         ),
     )
@@ -93,5 +93,16 @@ mod tests {
             err.to_string()
                 .contains("must contain only lowercase letters, digits, and hyphens")
         );
+    }
+
+    #[test]
+    fn scaffold_builds_html_entrypoint() {
+        let package_json = format!(
+            "{{\n  \"name\": \"{}\",\n  \"private\": true,\n  \"version\": \"0.1.0\",\n  \"scripts\": {{\n    \"build\": \"bun build index.html --outdir dist\"\n  }},\n  \"dependencies\": {{\n    \"react\": \"^19.0.0\",\n    \"react-dom\": \"^19.0.0\"\n  }}\n}}\n",
+            "example"
+        );
+
+        assert!(package_json.contains("bun build index.html --outdir dist"));
+        assert!(!package_json.contains("bun build src/main.tsx --outdir dist"));
     }
 }

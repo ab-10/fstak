@@ -1,18 +1,6 @@
-"""FastAPI application for the fstak control plane.
-
-This is the single entry point for the control plane HTTP surface.
-Routes are organized by domain (auth, run/deploy, projects, etc.).
-
-For local development:
-    cd backend
-    uvicorn main:app --reload
-
-From repo root:
-    PYTHONPATH=backend uvicorn backend.main:app --reload
-"""
-
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import shutil
@@ -21,20 +9,42 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, Depends, Request, UploadFile, File, Form, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .auth import require_auth, AuthContext
+from .auth import AuthContext, require_auth
 from .auth_manager import manager
-from .store import store  # in-memory store for MVP (Story 1-5)
+from .caddy import CaddyClient
+from .config import get_settings
+from .storage import AssetStorage
+from .store import store
 
-app = FastAPI(
-    title="fstak control plane",
-    description="Control plane for fstak static SPA deployments.",
-    version="0.1.0",
-)
+app = FastAPI(title="fstak control plane", description="Control plane for fstak static SPA deployments.", version="0.2.0")
+
+
+def _asset_storage() -> AssetStorage:
+    settings = get_settings()
+    return AssetStorage(settings.gcs_bucket_name)
+
+
+def _caddy_client() -> CaddyClient:
+    settings = get_settings()
+    return CaddyClient(settings.caddy_admin_url, settings.domain_suffix, settings.gcs_bucket_name)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    settings = get_settings()
+    await store.configure(settings.database_url)
+    caddy = _caddy_client()
+    route_lister = getattr(store, "list_active_project_routes", None)
+    if route_lister is None:
+        return
+    for project_slug, deployment_id in await route_lister():
+        await caddy.upsert_project_route(project_slug, deployment_id)
 
 
 def _extract_archive(archive_bytes: bytes, workdir: Path) -> Path:
@@ -45,103 +55,81 @@ def _extract_archive(archive_bytes: bytes, workdir: Path) -> Path:
     return src_dir
 
 
-def _run_build(src_dir: Path, deps: list[str]) -> tuple[Path, str]:
+def _run_build(src_dir: Path, deps: list[str], env_vars: dict[str, str]) -> tuple[Path, str]:
     bun = shutil.which("bun")
     if bun is None:
-        fallback_dist = src_dir / "dist"
-        fallback_dist.mkdir(parents=True, exist_ok=True)
-        index_src = src_dir / "index.html"
-        if index_src.exists():
-            shutil.copy2(index_src, fallback_dist / "index.html")
-            return fallback_dist, "fallback-no-bun"
-        raise RuntimeError("bun is not installed on builder host and index.html fallback is unavailable")
+        raise RuntimeError(
+            "bun is required for the build pipeline but was not found on PATH; install bun on the build host"
+        )
 
     env = os.environ.copy()
     env.setdefault("CI", "1")
+    env.update(env_vars)
 
     if deps:
-        add = subprocess.run(
-            [bun, "add", *deps],
-            cwd=src_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        add = subprocess.run([bun, "add", *deps], cwd=src_dir, env=env, capture_output=True, text=True)
         if add.returncode != 0:
             raise RuntimeError(f"bun add failed: {add.stderr.strip() or add.stdout.strip()}")
         strategy = "bun+deps"
     else:
         install = subprocess.run(
-            [bun, "install", "--frozen-lockfile"],
-            cwd=src_dir,
-            env=env,
-            capture_output=True,
-            text=True,
+            [bun, "install", "--frozen-lockfile"], cwd=src_dir, env=env, capture_output=True, text=True
         )
         if install.returncode != 0:
             raise RuntimeError(f"bun install failed: {install.stderr.strip() or install.stdout.strip()}")
         strategy = "bun"
 
-    build = subprocess.run(
-        [bun, "run", "build"],
-        cwd=src_dir,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    build = subprocess.run([bun, "run", "build"], cwd=src_dir, env=env, capture_output=True, text=True)
     if build.returncode != 0:
         raise RuntimeError(f"bun build failed: {build.stderr.strip() or build.stdout.strip()}")
 
     dist = src_dir / "dist"
     if not dist.exists():
         raise RuntimeError("build completed but dist/ was not produced")
+    if not (dist / "index.html").is_file():
+        raise RuntimeError("build completed but dist/index.html was not produced")
     return dist, strategy
 
 
-def _materialize_assets(project_slug: str, deployment_id: str, dist_dir: Path) -> str:
-    assets_root = Path(tempfile.gettempdir()) / "fstak-assets"
-    prefix = f"projects/{project_slug}/{deployment_id}"
-    target = assets_root / prefix
-    if target.exists():
-        shutil.rmtree(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(dist_dir, target)
-    return prefix
+def _sha256_bytes(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
 @app.get("/health")
 def health() -> JSONResponse:
-    """Liveness/readiness check. Returns 200 when the process is up."""
     return JSONResponse({"status": "ok"})
 
 
-# --- Auth endpoints (Story 2) ---
-
 @app.post("/auth/device")
 async def auth_device() -> dict:
-    """Start a device authorization flow (matches CLI login.rs expectations)."""
-    return manager.create_device_session()
+    settings = get_settings()
+    if not settings.spx_github_client_id:
+        raise HTTPException(status_code=500, detail="SPX_GITHUB_CLIENT_ID is not configured")
+    return manager.create_device_session(settings.spx_github_client_id)
 
 
 @app.post("/auth/token")
 async def auth_token(request: Request) -> dict:
-    """Poll for a device token (or receive the final token once approved)."""
     body = await request.json()
     poll_token = body.get("poll_token", "")
-    return manager.poll_device_token(poll_token)
+    settings = get_settings()
+    if not settings.spx_github_client_id:
+        raise HTTPException(status_code=500, detail="SPX_GITHUB_CLIENT_ID is not configured")
+    return manager.poll_device_token(settings.spx_github_client_id, poll_token)
 
 
 @app.post("/auth/code")
 async def auth_code(request: Request) -> dict:
-    """Redeem a registration / bootstrap code (used by `fstak login --code`)."""
     body = await request.json()
     code = body.get("code", "")
-    return manager.redeem_code(code)
+    try:
+        return manager.redeem_code(code)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.get("/auth/whoami")
 def auth_whoami(auth: AuthContext = Depends(require_auth)) -> JSONResponse:
-    """Return account identity for a validated bearer token."""
     return JSONResponse({"account_id": auth.account_id, "username": auth.username})
 
 
@@ -160,12 +148,15 @@ async def run_deploy(
     project_slug: str | None = Form(default=None),
     auth: AuthContext = Depends(require_auth),
 ) -> JSONResponse:
+    storage = _asset_storage()
+    caddy = _caddy_client()
+
     try:
-        project = store.upsert_project(auth.account_id, project_name, project_slug)
+        project = await store.upsert_project(auth.account_id, project_name, project_slug)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    deployment = store.create_deployment(project.slug, asset_prefix=f"projects/{project.slug}/pending")
+    deployment = await store.create_deployment(project.slug)
     build_seconds = 0.0
     upload_seconds = 0.0
     route_update_seconds = 0.0
@@ -175,31 +166,44 @@ async def run_deploy(
         workdir = Path(tmpdir)
         try:
             archive_bytes = await code.read()
+            source_hash = _sha256_bytes(archive_bytes)
 
             start = time.perf_counter()
             src_dir = _extract_archive(archive_bytes, workdir)
-            dist_dir, strategy = _run_build(src_dir, store.list_deps(project.slug))
+            deps = await store.list_deps(project.slug)
+            env_vars = await store.list_env(project.slug)
+            dist_dir, strategy = _run_build(src_dir, deps, env_vars)
             build_seconds = time.perf_counter() - start
 
             start = time.perf_counter()
-            asset_prefix = _materialize_assets(project.slug, deployment.id, dist_dir)
+            asset_prefix = f"deployments/{project.slug}/{deployment.id}"
+            uploaded = await storage.upload_dist(asset_prefix, dist_dir)
             upload_seconds = time.perf_counter() - start
 
+            manifest: dict[str, Any] = {
+                "deployment_id": deployment.id,
+                "project_slug": project.slug,
+                "source_hash": source_hash,
+                "artifact_hash": uploaded["artifact_hash"],
+                "files": uploaded["files"],
+            }
+
             start = time.perf_counter()
-            store.mark_deployment(
+            await store.finalize_deployment(
                 deployment.id,
-                status="ready",
+                asset_prefix=asset_prefix,
+                source_hash=source_hash,
+                artifact_hash=uploaded["artifact_hash"],
+                manifest_json=manifest,
                 build_seconds=build_seconds,
                 upload_seconds=upload_seconds,
-                route_update_seconds=0.001,
-                error=None,
+                route_update_seconds=0.0,
             )
-            deployment.asset_prefix = asset_prefix
+            await caddy.upsert_project_route(project.slug, deployment.id)
             route_update_seconds = time.perf_counter() - start
         except Exception as exc:  # noqa: BLE001
-            store.mark_deployment(
+            await store.fail_deployment(
                 deployment.id,
-                status="failed",
                 build_seconds=build_seconds,
                 upload_seconds=upload_seconds,
                 route_update_seconds=route_update_seconds,
@@ -225,14 +229,14 @@ async def run_deploy(
 
 
 @app.get("/projects")
-def list_projects(auth: AuthContext = Depends(require_auth)) -> JSONResponse:
-    return JSONResponse(store.list_projects_for_account(auth.account_id))
+async def list_projects(auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+    return JSONResponse(await store.list_projects_for_account(auth.account_id))
 
 
 @app.get("/projects/{project_slug}")
-def project_details(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def project_details(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        project = store.ensure_project_owner(auth.account_id, project_slug)
+        project = await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
@@ -249,85 +253,85 @@ def project_details(project_slug: str, auth: AuthContext = Depends(require_auth)
 
 
 @app.get("/projects/{project_slug}/deployments")
-def list_deployments(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def list_deployments(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return JSONResponse(store.list_deployments_for_project(project_slug))
+    return JSONResponse(await store.list_deployments_for_project(project_slug))
 
 
 @app.post("/projects/{project_slug}/kill")
-def kill_project(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def kill_project(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+    caddy = _caddy_client()
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    store.kill_project(project_slug)
+    await store.kill_project(project_slug)
+    await caddy.remove_project_route(project_slug)
     return JSONResponse({"status": "killed", "project_slug": project_slug})
 
 
 @app.get("/projects/{project_slug}/env")
-def env_list(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def env_list(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        project = store.ensure_project_owner(auth.account_id, project_slug)
+        project = await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    items = [{"key": k, "updated_at": None} for k in sorted(store.list_env(project_slug).keys())]
+    items = [{"key": k, "updated_at": None} for k in sorted((await store.list_env(project_slug)).keys())]
     return JSONResponse({"project_slug": project.slug, "project_name": project.project_name, "variables": items})
 
 
 @app.put("/projects/{project_slug}/env/{key}")
-def env_set(
+async def env_set(
     project_slug: str,
     key: str,
     payload: EnvSetPayload,
     auth: AuthContext = Depends(require_auth),
 ) -> JSONResponse:
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    store.set_env(project_slug, key, payload.value)
+    await store.set_env(project_slug, key, payload.value)
     return JSONResponse({"status": "ok"})
 
 
 @app.delete("/projects/{project_slug}/env/{key}")
-def env_unset(project_slug: str, key: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def env_unset(project_slug: str, key: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    store.unset_env(project_slug, key)
+    await store.unset_env(project_slug, key)
     return JSONResponse({"status": "ok"})
 
 
 @app.get("/projects/{project_slug}/deps")
-def deps_list(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def deps_list(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        project = store.ensure_project_owner(auth.account_id, project_slug)
+        project = await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    items = [{"name": dep, "requirement": dep, "updated_at": None} for dep in store.list_deps(project_slug)]
-    return JSONResponse(
-        {"project_slug": project.slug, "project_name": project.project_name, "dependencies": items}
-    )
+    items = [{"name": dep, "requirement": dep, "updated_at": None} for dep in await store.list_deps(project_slug)]
+    return JSONResponse({"project_slug": project.slug, "project_name": project.project_name, "dependencies": items})
 
 
 @app.put("/projects/{project_slug}/deps/{name}")
-def deps_set(
+async def deps_set(
     project_slug: str,
     name: str,
     payload: DepSetPayload,
@@ -335,56 +339,38 @@ def deps_set(
 ) -> JSONResponse:
     _ = payload
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    store.set_dep(project_slug, name)
+    await store.set_dep(project_slug, name)
     return JSONResponse({"status": "ok"})
 
 
 @app.delete("/projects/{project_slug}/deps/{name}")
-def deps_unset(project_slug: str, name: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def deps_unset(project_slug: str, name: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    store.unset_dep(project_slug, name)
+    await store.unset_dep(project_slug, name)
     return JSONResponse({"status": "ok"})
 
 
 @app.get("/projects/{project_slug}/logs")
-def logs(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
+async def logs(project_slug: str, auth: AuthContext = Depends(require_auth)) -> JSONResponse:
     try:
-        store.ensure_project_owner(auth.account_id, project_slug)
+        await store.ensure_project_owner(auth.account_id, project_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return JSONResponse([])
+    raise HTTPException(status_code=501, detail="log retrieval is not yet implemented")
 
 
 @app.post("/feedback")
 async def feedback(_: Request) -> JSONResponse:
-    return JSONResponse({"status": "accepted"})
-
-
-# --- Story 5+, 9+, 10+ routes are implemented above with in-memory defaults ---
-#
-# Example pattern (not yet implemented; added here so the skeleton is clear):
-#
-# from fastapi import APIRouter
-#
-# run_router = APIRouter(tags=["deploy"])
-# projects_router = APIRouter(prefix="/projects", tags=["projects"])
-#
-# @run_router.post("/run")
-# async def run_deploy(..., auth: AuthContext = Depends(require_auth)): ...
-#
-# app.include_router(run_router)
-# app.include_router(projects_router)
-#
-# Auth routes are implemented above for Story 2.
+    raise HTTPException(status_code=501, detail="feedback storage is not yet implemented")

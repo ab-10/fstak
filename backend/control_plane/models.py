@@ -14,6 +14,9 @@ class Deployment:
     project_slug: str
     asset_prefix: str
     status: str = "pending"
+    source_hash: str | None = None
+    artifact_hash: str | None = None
+    manifest_hash: str | None = None
     build_seconds: float = 0.0
     upload_seconds: float = 0.0
     route_update_seconds: float = 0.0

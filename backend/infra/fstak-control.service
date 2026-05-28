@@ -1,0 +1,17 @@
+[Unit]
+Description=fstak control plane
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/fstak/backend
+EnvironmentFile=-/etc/fstak/secrets.env
+Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/fstak/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 9000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

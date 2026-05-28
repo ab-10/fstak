@@ -8,6 +8,10 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   "python-multipart>=0.0.9",
   "pydantic>=2.8",
+  "pydantic-settings>=2.3",
+  "sqlalchemy>=2.0",
+  "asyncpg>=0.29",
+  "google-cloud-storage>=2.18",
 ]
 
 [tool.pyright]

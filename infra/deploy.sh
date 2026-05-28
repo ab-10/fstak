@@ -27,8 +27,11 @@
 #   FSTAK_CONTROL_PLANE_PORT (optional)
 #       Local bind port for the control plane. Defaults to 8000 for local.
 #
+#   SPX_GITHUB_CLIENT_ID
+#       Required for `fstak login` device auth. Shared SPX GitHub OAuth app client ID.
+#
 #   (Later additions that will be required for full deploys:)
-#     FSTAK_GCP_PROJECT, FSTAK_GCS_BUCKET, FSTAK_CADDY_HOST, FSTAK_BUILD_WORKER_IMAGE, ...
+#     FSTAK_GCP_PROJECT, FSTAK_GCS_BUCKET, FSTAK_CADDY_ADMIN_URL, FSTAK_DATABASE_URL, ...
 #
 # Idempotency:
 #   This script is safe to re-run. It uses mkdir -p, conditional service management,
@@ -61,6 +64,11 @@ Environment (required unless noted):
   FSTAK_ENV=local|staging|prod          (controls target environment)
   FSTAK_CONTROL_PLANE_HOST              (required for --remote)
   FSTAK_CONTROL_PLANE_PORT              (optional, defaults to 8000 for local)
+  FSTAK_GCP_PROJECT                      (required for --remote)
+  FSTAK_GCS_BUCKET                       (required for --remote)
+  FSTAK_DATABASE_URL                     (required for --remote)
+  FSTAK_CADDY_ADMIN_URL                  (required for --remote)
+  SPX_GITHUB_CLIENT_ID                   (required for shared SPX login device auth)
 
 The script fails with a clear message if a required variable for the chosen target is unset.
 EOF
@@ -110,7 +118,7 @@ case "$cmd" in
       echo "Control plane source: $CONTROL_PLANE_DIR"
 
       if [[ "$dry_run" == true ]]; then
-        echo "(dry-run) would start: cd $CONTROL_PLANE_DIR && uv run --with fastapi --with 'uvicorn[standard]' uvicorn main:app --host 127.0.0.1 --port $port"
+        echo "(dry-run) would start: cd $CONTROL_PLANE_DIR && SPX_GITHUB_CLIENT_ID=... uv run --with fastapi --with 'uvicorn[standard]' uvicorn main:app --host 127.0.0.1 --port $port"
         echo "Verification command:"
         echo "  curl -s http://127.0.0.1:$port/health | jq ."
         exit 0
@@ -122,6 +130,7 @@ case "$cmd" in
       echo "To run the control plane locally (recommended for contributors):"
       echo ""
       echo "  cd $CONTROL_PLANE_DIR"
+      echo "  export SPX_GITHUB_CLIENT_ID=..."
       echo "  uv run --with fastapi --with 'uvicorn[standard]' \\"
       echo "    uvicorn main:app --host 127.0.0.1 --port $port --reload"
       echo ""
@@ -133,15 +142,27 @@ case "$cmd" in
 
     elif [[ "$target" == "remote" ]]; then
       require_var FSTAK_CONTROL_PLANE_HOST "hostname or IP for remote control plane"
+      require_var FSTAK_GCP_PROJECT "GCP project ID"
+      require_var FSTAK_GCS_BUCKET "GCS bucket for deployment artifacts"
+      require_var FSTAK_DATABASE_URL "Neon/Postgres connection URL"
+      require_var FSTAK_CADDY_ADMIN_URL "Caddy admin API URL"
+      require_var SPX_GITHUB_CLIENT_ID "shared SPX GitHub OAuth app client ID for device login"
 
       echo "[fstak deploy] control-plane (remote) — host=$FSTAK_CONTROL_PLANE_HOST env=$FSTAK_ENV"
-      echo "NOTE: Remote deployment is a stub in Story 1/11. Real implementation will:"
-      echo "  - rsync or image the backend/ tree"
-      echo "  - manage a systemd unit or container on the host"
-      echo "  - wire secrets via the platform secret store (never committed)"
+      echo "MVP topology selected: single small VM with colocated Caddy + control plane + build subprocess worker."
+      echo "Expected env wiring for service runtime:"
+      echo "  - FSTAK_DATABASE_URL=$FSTAK_DATABASE_URL"
+      echo "  - FSTAK_GCS_BUCKET_NAME=$FSTAK_GCS_BUCKET"
+      echo "  - FSTAK_CADDY_ADMIN_URL=$FSTAK_CADDY_ADMIN_URL"
+      echo "  - SPX_GITHUB_CLIENT_ID=$SPX_GITHUB_CLIENT_ID"
+      echo "  - FSTAK_DOMAIN_SUFFIX=fstak.runspx.com"
       echo ""
-      echo "For now this target only validates inputs and prints the intended steps."
-      echo "Idempotent re-run is supported (no mutations performed yet)."
+      echo "Remote rollout steps (idempotent, operator-executed):"
+      echo "  1) Deploy backend code to $FSTAK_CONTROL_PLANE_HOST"
+      echo "  2) Install/verify Bun, Caddy, and service manager units"
+      echo "  3) Ensure Caddy admin API reachable at $FSTAK_CADDY_ADMIN_URL"
+      echo "  4) Export env vars and restart control-plane service"
+      echo "  5) Run ./infra/deploy.sh verify and capture evidence"
     fi
     ;;
 
@@ -171,10 +192,10 @@ case "$cmd" in
     fi
 
     echo ""
-    echo "Future surfaces (documented for completeness; not yet applicable):"
-    echo "  - Build workers: pgrep on worker hosts, queue depth via admin API"
-    echo "  - GCS objects: gsutil ls -p \$FSTAK_GCP_PROJECT gs://\$FSTAK_GCS_BUCKET/fstak/..."
-    echo "  - Caddy routes: curl -s http://localhost:2019/config/ | jq '.apps.http.servers'"
+    echo "Cloud topology checks (small VM MVP):"
+    echo "  - Caddy routes: curl -s \${FSTAK_CADDY_ADMIN_URL:-http://localhost:2019}/config/ | jq '.apps.http.servers'"
+    echo "  - GCS objects: gsutil ls -p \$FSTAK_GCP_PROJECT gs://\$FSTAK_GCS_BUCKET/deployments/"
+    echo "  - DB connectivity: psql \"\$FSTAK_DATABASE_URL\" -c 'select 1'"
     echo "  - Cloud resources: gcloud compute instances list --project \$FSTAK_GCP_PROJECT"
     echo ""
     echo "Evidence rule: paste the literal output of the above commands into status docs."

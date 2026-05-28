@@ -95,22 +95,6 @@ Before declaring status, the agent asks:
 *What are the ways this could be wrong — in design, in concurrency, in failure, in integration, in logic — and what evidence would rule each one out?*
 If the list is shorter than the real answer, the status is premature.
 
-## No silent degradation
-
-The common failure mode in this codebase is code that quietly does the wrong thing when a prerequisite is missing, instead of failing loudly. An "empty success" is indistinguishable from a working system with no data, so it propagates through logs, tests, and dashboards undetected. The following rules are non-negotiable:
-
-1. **Unimplemented endpoints return 501, never `[]` or `{"status":"accepted"}`.** A handler with no real implementation must respond `501 Not Implemented` (or omit the route entirely). Returning an empty success makes the stub invisible to callers and to integration tests.
-
-2. **Missing config fails fast, never no-ops.** If a required external dependency (GCS bucket, Caddy admin URL, database URL, etc.) is unset, the dependent operation must raise at startup or at the call site. The pattern `if not self._client: return` is banned — it lets a deploy report success while the asset was never uploaded and the route never reached the proxy.
-
-3. **Build tooling is required, not optional.** A missing build tool (e.g. `bun`) aborts the build with a clear error. Fallbacks must produce a distinct *failure*, not a degraded *success* that shares the same status field as a real build.
-
-4. **Persistent-by-name state is persistent-by-implementation from day one.** A class called `AuthManager` that loses every token on restart is a lie. If an MVP cannot have real persistence yet, name it `EphemeralAuthManager` (or similar) AND log a `WARNING` at startup describing what is lost on restart, so the limitation is visible on every boot.
-
-5. **Dev-only auth bypasses are gated by an env flag that defaults off, and log loudly when used.** Any code path that accepts unverified credentials (e.g. accepting any non-empty code) must be behind a flag like `FSTAK_ALLOW_DEV_LOGIN=1` and must emit a `WARNING` on every request through that path. A dev bypass with no flag and no log is a production auth hole waiting to be discovered.
-
-6. **The "Defaults and empty config" bug class is mandatory for every new endpoint or integration.** Before merging, the status doc must answer: *what happens when the relevant config/dependency is unset?* The answer cannot be "silently succeeds." If it is, the change is unverified.
-
 ## Agent-friendly CLI design principles
 
 - fstak CLI commands must be non-interactive by default and safe for agents, scripts, and CI.
